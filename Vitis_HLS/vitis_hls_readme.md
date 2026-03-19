@@ -42,12 +42,26 @@ When bridging open-source compilers (`hls4ml`) with strict proprietary toolchain
   tb.file=./firmware/weights
   tb.file=./tb_data
   ```
-
+  
 ## Usage & Synthesis
-Once the configuration is patched, the workflow is standard:
 
+
+
+Once the configuration is patched, the synthesis must be told where the `firmware/` source code resides. Without the correct include flags, the compiler will be unable to locate the BitNet layer definitions.
+
+### 1. Configure the Synthesis Search Path
+In your `hls_config.cfg` file (or via the GUI Project Settings), you must add the `firmware` directory to the **Compiler Flags**. This ensures the internal headers are discovered during the RTL generation phase:
+
+```ini
+# Add to hls_config.cfg
+syn.file=firmware/bitnet_llm.cpp
+syn.flags="-Ifirmware"
+```
+
+### 2. The Build Workflow
 1. **Run C-Simulation:** Verifies the C++ ternary math perfectly matches the Python PyTorch model.
-2. **Run C-Synthesis:** Translates the code into Verilog. *(Verify DSP48E utilization is 0, proving the MatMul-free design worked).*
+2. **Run C-Synthesis:** Translates the code into Verilog. 
+   * *Verification:* Check the Synthesis Report. **DSP48E utilization must be 0**, confirming the MatMul-free adder-tree architecture is active.
 3. **Export RTL:** Packages the design as `Vivado IP for IP Catalog`.
 
-**Output:** A packaged `.zip` file inside `solution1/impl/ip/`, ready to be imported into Vivado IP Integrator.
+**Output:** A packaged `.zip` file located at `solution1/impl/ip/`, which is the source for our Phase 3 Vivado Integration.
