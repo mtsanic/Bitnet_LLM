@@ -9,7 +9,7 @@ import os
 import warnings
 
 warnings.filterwarnings("ignore", message=".*Named tensors and all their associated APIs.*")
-os.makedirs("BitNet_LLM", exist_ok=True)
+os.makedirs("../BitNet_LLM", exist_ok=True)
 
 class BitNetWeightQuant(Int8WeightPerTensorFloat):
     bit_width = 2
