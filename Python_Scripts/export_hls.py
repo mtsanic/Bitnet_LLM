@@ -7,7 +7,8 @@ from brevitas.export import export_qonnx
 from qonnx.util.cleanup import cleanup
 
 warnings.filterwarnings("ignore", message=".*Named tensors and all their associated APIs.*")
-from BitNet_LLM.Python_Scripts.bitnet import QuantBitNetBlock
+from bitnet import QuantBitNetBlock
+
 
 def generate_vitis_hls():
     print("="*50)
@@ -17,9 +18,9 @@ def generate_vitis_hls():
     hidden_dim = 64
     model = QuantBitNetBlock(hidden_dim=hidden_dim)
     
-    weights_path = "../BitNet_LLM/trained_bitnet.pth"
-    onnx_path = "../BitNet_LLM/bitnet_158b.onnx"
-    output_dir = "../Vitis_HLS/bitnet_hls_workspace"
+    weights_path = "./BitNet_LLM_Trained_Models/trained_bitnet.pth"
+    onnx_path = "./BitNet_LLM_Trained_Models/bitnet_158b.onnx"
+    output_dir = "./Vitis_HLS/bitnet_hls_workspace"
     
     if os.path.exists(weights_path):
         print(f"[*] Loading trained weights from: {weights_path}")
