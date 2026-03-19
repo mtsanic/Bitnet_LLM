@@ -1,35 +1,50 @@
-# BitNet 1.58b FPGA Accelerator
+# BitNet 1.58b FPGA Accelerator: Vivado Hardware Integration
 
 
 
 ## Overview
-This repository contains a complete, edge-to-edge hardware/software co-design pipeline for training, quantizing, and deploying a **MatMul-free Large Language Model (BitNet 1.58b)** onto Xilinx/AMD Zynq-7000 Series FPGAs.
+This phase covers the physical hardware assembly within **Vivado 2024.1**. In this stage, the custom BitNet IP (synthesized in Phase 2) is imported into Vivado IP Integrator and wired to the Zynq-7000 Processing System (ARM Cortex-A9) using an AXI Direct Memory Access (DMA) engine. 
 
-By constraining network weights to ternary values `{-1, 0, 1}`, this architecture completely eliminates the need for DSP-heavy floating-point multiply-accumulate (MAC) operations. Instead, it relies on highly efficient, purely additive integer trees, allowing for massive parallelization and low-power inference on edge silicon.
+The result is a complete, bitstream-ready System-on-Chip (SoC) architecture where the ARM processor can push tokens directly from DDR memory into the AI silicon at maximum throughput.
 
-This project bridges the gap between high-level AI frameworks and bare-metal physical hardware routing.
+## System Architecture: The Data-Driven Pipeline
+Because the BitNet IP was synthesized with `#pragma HLS INTERFACE ap_ctrl_none`, it acts as a pure, free-running stream processor. 
+1. **The CPU** prepares the token data in DDR memory and commands the DMA.
+2. **The DMA (MM2S)** blasts the 1024-bit token across the AXI-Stream fabric.
+3. **The BitNet IP** automatically wakes up upon receiving `TVALID = 1`, computes the MatMul-free ternary additions in a single cycle, and asserts the output.
+4. **The DMA (S2MM)** captures the result and writes it back to DDR memory.
+5. The CPU reads the result. Zero AXI-Lite polling or CPU-IP handshaking is required.
 
-## Technology Stack
-* **Machine Learning:** Python, PyTorch, Brevitas (Quantization-Aware Training)
-* **High-Level Synthesis:** `hls4ml`, `qonnx`
-* **Hardware Engineering:** AMD/Xilinx Vitis HLS 2024.1, Vivado 2024.1
-* **Embedded Software:** Vitis Unified IDE 2024.1, Bare-Metal C (ARM Cortex-A9)
+## Hardware Integration Fixes
+Directly connecting an auto-generated HLS stream IP to a strict DMA controller presents several AXI protocol challenges. Here is how they were resolved in the Block Design:
 
-## Project Structure & Pipeline
+### 1. The `TLAST` Packet Boundary Injection
+* **The Problem:** The AXI DMA absolutely requires a `TLAST` (Last) signal on the S2MM (Stream-to-Memory) channel to know when a packet has finished. The BitNet IP outputs raw numbers, not formatted AXI packets, causing the DMA to hang indefinitely.
+* **The Solution:** We inserted a **Xilinx AXI4-Stream Subset Converter** between the BitNet IP and the DMA. This block was configured to forcefully inject a constant `1` into the `TLAST` pin. Because the BitNet IP outputs the entire prediction in a single clock beat, that single beat is chronologically always the "last" beat.
 
-This repository is divided into four chronological engineering phases. Click into each folder for detailed documentation, toolchain bypasses, and usage instructions.
 
-### 📁 [Phase 1: Python Toolchain & Export](./Python_Scripts/)
-The software front-end. Defines the PyTorch architecture, executes 1.58-bit Quantization-Aware Training (QAT), and utilizes `hls4ml` to export a rigidly clamped, hardware-aware C++ representation of the ONNX graph.
 
-### 📁 [Phase 2: Vitis HLS Synthesis](./Vitis_HLS/)
-The bridge from math to silicon. Ingests the auto-generated C++ and synthesizes it into raw RTL. This phase documents our architectural upgrade to a purely data-driven, `ap_ctrl_none` streaming core to eliminate ARM CPU overhead.
+### 2. AXI Bus Width Balancing (1024-bit Firehose)
+* **The Problem:** The AI accelerator ingests and outputs all 64 features (16 bits each) in parallel, requiring a massive 1024-bit physical data bus. The default DMA is 32 bits, causing connection validation failures. 
+* **The Solution:** We explicitly expanded both the Stream and Memory-Mapped widths of the DMA to 1024 bits. This forces the background AXI Interconnects to automatically instantiate highly optimized memory width converters, funneling the massive 1024-bit IP beats cleanly into the Zynq's 64-bit DDR memory port.
 
-### 📁 [Phase 3: Vivado Hardware Integration](./Vivado_Integration/)
-The motherboard assembly. Contains the Tcl automation scripts to instantiate the Zynq Processing System, route the 1024-bit AXI Direct Memory Access (DMA) engine, and resolve strict AXI4-Stream protocol mismatches (like `TLAST` injection) to perfectly integrate the `mts:hls:BitNet_LLM:1.0` IP.
+## Automated Block Design Generation (Tcl)
+To eliminate manual GUI errors and ensure absolute reproducibility, the entire Block Design is generated via a Tcl script. 
 
-### 📁 [Phase 4: Bare-Metal Firmware](./Vitis_Firmware/)
-The software execution layer. Contains the bare-metal C drivers running on the Zynq ARM Cortex-A9. This code manages DDR memory cache coherence and triggers the DMA to blast tokens through the physical AI accelerator at maximum throughput.
+### Usage
+1. Open Vivado 2024.1 and create an empty RTL project targeting your specific board part (e.g., `xc7z010clg400-1`).
+2. Open the **Tcl Console** at the bottom of the Vivado GUI.
+3. Source the provided build script:
+   ```tcl
+   source build_bd.tcl
+   ```
+4. The script will automatically:
+   * Import the custom `mts:hls:BitNet_LLM:1.0` IP.
+   * Instantiate the Zynq PS and AXI DMA.
+   * Drop in the Subset Converter and configure the `TLAST` remap.
+   * Wire all AXI-Stream data paths and AXI-Lite control paths.
+   * Map the High-Performance (HP0) memory ports.
+   * Validate and save the design.
+5. Right-click the generated `design_1` in the Sources tab, select **Create HDL Wrapper**, and click **Generate Bitstream**.
 
-## Getting Started
-To replicate this build, please navigate to **Phase 1** and follow the sequential pipeline. You will need a standard Python environment and an installation of the AMD/Xilinx 2024.1 Unified Design Suite.
+**Output:** A physical `.bit` hardware file and an exported `.xsa` (Xilinx Support Archive) file to hand off to the Vitis software environment.
