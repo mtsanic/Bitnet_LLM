@@ -11,3 +11,17 @@ The journey from abstract AI model to physical silicon begins in the `Python_Scr
 * **Silicon Generation:** Utilizes `hls4ml` to translate the Python graph into a cycle-accurate, data-driven Vitis HLS C++ IP block, perfectly clamped to fit the Zynq-7000 AXI4-Stream bus limits.
 
 📁 **[Read the full Python Toolchain documentation and usage instructions here](./Python_Scripts/)**
+
+
+## ⚙️ Phase 2: Vitis HLS (C++ to Silicon RTL)
+
+
+
+Once the Python toolchain generates the heavily optimized C++ workspace, this phase focuses on synthesizing that high-level code into physical hardware logic using Vitis HLS 2024.1.
+
+**Key operations in this stage:**
+* **RTL Synthesis:** Translating the ternary MatMul-free adder trees into raw, highly optimized Verilog/VHDL.
+* **Data-Driven Architecture Optimization:** By injecting `#pragma HLS INTERFACE ap_ctrl_none`, we intentionally stripped out the AXI-Lite control state machine (`ap_start`, `ap_done`). This converts the IP into a pure, free-running AXI4-Stream processor, saving physical LUTs and eliminating ARM CPU overhead.
+* **IP Packaging:** Exporting the final synthesized hardware as a standalone Vivado IP block (`.zip`), specifically tailored for the `xc7z010clg400-1` fabric.
+
+📁 **[Read the full Vitis HLS synthesis guide and toolchain workarounds here](./Vitis_HLS/)**
