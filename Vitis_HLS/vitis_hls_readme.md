@@ -55,7 +55,7 @@ In your `hls_config.cfg` file (or via the GUI Project Settings), you must add th
 ```ini
 # Add to hls_config.cfg
 syn.file=firmware/bitnet_llm.cpp
-syn.flags="-Ifirmware"
+syn.flags="-I ./firmware"
 ```
 
 ### 2. The Build Workflow
