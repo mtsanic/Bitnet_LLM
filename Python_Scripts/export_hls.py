@@ -17,9 +17,9 @@ def generate_vitis_hls():
     hidden_dim = 64
     model = QuantBitNetBlock(hidden_dim=hidden_dim)
     
-    weights_path = "../trained_bitnet.pth"
-    onnx_path = "../bitnet_158b.onnx"
-    output_dir = "../bitnet_hls_workspace"
+    weights_path = "../BitNet_LLM/trained_bitnet.pth"
+    onnx_path = "../BitNet_LLM/bitnet_158b.onnx"
+    output_dir = "../Vitis_HLS/bitnet_hls_workspace"
     
     if os.path.exists(weights_path):
         print(f"[*] Loading trained weights from: {weights_path}")
