@@ -9,7 +9,7 @@ import os
 import warnings
 
 warnings.filterwarnings("ignore", message=".*Named tensors and all their associated APIs.*")
-os.makedirs("../BitNet_LLM", exist_ok=True)
+os.makedirs("./BitNet_LLM_Trained_Models", exist_ok=True)
 
 class BitNetWeightQuant(Int8WeightPerTensorFloat):
     bit_width = 2
@@ -123,7 +123,7 @@ def train_autoencoder():
     else:
         print("\n⚠️ FAILED: The model is still not converging correctly.")
         
-    save_path = "BitNet_LLM/trained_bitnet.pth"
+    save_path = "./BitNet_LLM_Trained_Models/trained_bitnet.pth"
     torch.save(model.state_dict(), save_path)
     print(f"[*] Trained hardware weights safely saved to '{save_path}'")
     print("="*60 + "\n")
