@@ -1,74 +1,49 @@
-# ==============================================================================
-# 🛠️ BITNET 1.58b VIVADO BLOCK DESIGN AUTOMATION 
-# ==============================================================================
+# =========================================================
+# Vivado BitNet System Builder Script
+# =========================================================
 
-# 1. Set the path to your generated HLS IP and update catalog
-set ip_repo_path "../Vitis_HLS/bitnet_hls_workspace/solution1/impl/ip"
+# 1. Project Configuration
+set project_name "BitNet_Vivado"
+set part_name "xc7z010clg400-1"
+# Point this to the directory where v++ exported your IP ZIP/folder
+set ip_repo_path "./Vitis_HLS/src/build" 
+
+# 2. Create Project
+create_project $project_name ./$project_name -part $part_name -force
+
+# 3. Add Custom IP Repository
 set_property ip_repo_paths $ip_repo_path [current_project]
 update_ip_catalog
 
-# 2. Create the Block Design
+# 4. Create Block Design
 create_bd_design "design_1"
 
-# 3. Instantiate and configure the Zynq Processing System (ARM Cortex-A9)
+# 5. Instantiate Zynq Processing System (PS)
 create_bd_cell -type ip -vlnv xilinx.com:ip:processing_system7:5.5 processing_system7_0
+
+# Apply Basic Zynq Automation (DDR and Fixed IO)
 apply_bd_automation -rule xilinx.com:bd_rule:processing_system7 -config {make_external "FIXED_IO, DDR" apply_board_preset "1" Master "Disable" Slave "Disable" }  [get_bd_cells processing_system7_0]
 
-# Enable AXI HP0 port for high-speed, direct-to-memory DMA transfers
-set_property -dict [list CONFIG.PCW_USE_S_AXI_HP0 {1}] [get_bd_cells processing_system7_0]
+# 6. Instantiate your custom BitNet IP (UPDATED VLNV)
+create_bd_cell -type ip -vlnv mts:zynq_ai:bitnet_llm:1.1 bitnet_llm_0
 
-# 4. Instantiate and configure the AXI Direct Memory Access (DMA)
-create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dma:7.1 axi_dma_0
+# 7. Apply Connection Automation
+# This wires the Zynq's Master AXI port to your IP's Slave AXI port and handles the 100MHz clock mapping
+apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config { Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto} Master {/processing_system7_0/M_AXI_GP0} Slave {/bitnet_llm_0/s_axi_control} ddr_seg {Auto} intc_ip {New AXI Interconnect} master_apm {0}}  [get_bd_intf_pins bitnet_llm_0/s_axi_control]
 
-# Disable Scatter-Gather, set buffer width to 26, and force 1024-bit (128-byte) data widths 
-# to handle the massive parallel feature ingestion.
-set_property -dict [list \
-    CONFIG.c_include_sg {0} \
-    CONFIG.c_sg_length_width {26} \
-    CONFIG.c_m_axis_mm2s_tdata_width {1024} \
-    CONFIG.c_s_axis_s2mm_tdata_width {1024} \
-    CONFIG.c_m_axi_mm2s_data_width {1024} \
-    CONFIG.c_m_axi_s2mm_data_width {1024} \
-] [get_bd_cells axi_dma_0]
-
-# 5. Instantiate your custom BitNet Accelerator IP (Data-Driven / ap_ctrl_none)
-create_bd_cell -type ip -vlnv mts:hls:BitNet_LLM:1.0 BitNet_LLM_0
-
-# 6. Instantiate the TLAST Injector (Subset Converter) for the S2MM channel
-create_bd_cell -type ip -vlnv xilinx.com:ip:axis_subset_converter:1.1 tlast_injector
-set_property -dict [list \
-    CONFIG.M_HAS_TLAST {1} \
-    CONFIG.TLAST_REMAP {1'b1} \
-    CONFIG.S_TDATA_NUM_BYTES {128} \
-    CONFIG.M_TDATA_NUM_BYTES {128} \
-] [get_bd_cells tlast_injector]
-
-# 7. Wire the AXI4-Stream Data Paths
-# DMA (MM2S) -> BitNet IP -> TLAST Injector -> DMA (S2MM)
-connect_bd_intf_net [get_bd_intf_pins axi_dma_0/M_AXIS_MM2S] [get_bd_intf_pins -of_objects [get_bd_cells BitNet_LLM_0] -filter {MODE==Slave && VLNV=~*axis*}]
-connect_bd_intf_net [get_bd_intf_pins -of_objects [get_bd_cells BitNet_LLM_0] -filter {MODE==Master && VLNV=~*axis*}] [get_bd_intf_pins tlast_injector/S_AXIS]
-connect_bd_intf_net [get_bd_intf_pins tlast_injector/M_AXIS] [get_bd_intf_pins axi_dma_0/S_AXIS_S2MM]
-
-# 8. Run Connection Automation for AXI-Lite (Control) and AXI-MM (Memory)
-apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config { Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto} Master {/processing_system7_0/M_AXI_GP0} Slave {/axi_dma_0/S_AXI_LITE} ddr_seg {Auto} intc_ip {New AXI Interconnect} master_apm {0}}  [get_bd_intf_pins axi_dma_0/S_AXI_LITE]
-apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config { Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto} Master {/axi_dma_0/M_AXI_MM2S} Slave {/processing_system7_0/S_AXI_HP0} ddr_seg {Auto} intc_ip {New AXI Interconnect} master_apm {0}}  [get_bd_intf_pins processing_system7_0/S_AXI_HP0]
-apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config { Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto} Master {/axi_dma_0/M_AXI_S2MM} Slave {/processing_system7_0/S_AXI_HP0} ddr_seg {Auto} intc_ip {New AXI Interconnect} master_apm {0}}  [get_bd_intf_pins axi_dma_0/M_AXI_S2MM]
-
-# 9. Manually connect Clocks and Resets for the Data-Driven IP and Injector
-connect_bd_net [get_bd_pins processing_system7_0/FCLK_CLK0] [get_bd_pins BitNet_LLM_0/ap_clk]
-connect_bd_net [get_bd_pins processing_system7_0/FCLK_CLK0] [get_bd_pins tlast_injector/aclk]
-
-set rst_net [get_bd_nets -of_objects [get_bd_pins axi_dma_0/axi_resetn]]
-connect_bd_net -net $rst_net [get_bd_pins BitNet_LLM_0/ap_rst_n]
-connect_bd_net -net $rst_net [get_bd_pins tlast_injector/aresetn]
-
-# 10. Clean up, Validate, and Save
+# 8. Clean up layout
 regenerate_bd_layout
-validate_bd_design
 save_bd_design
 
+# 9. Create HDL Wrapper
+set bd_file [get_files ./$project_name/$project_name.srcs/sources_1/bd/design_1/design_1.bd]
+make_wrapper -files $bd_file -top
+add_files -norecurse ./$project_name/$project_name.gen/sources_1/bd/design_1/hdl/design_1_wrapper.v
 
+# Set top-level module
+set_property top design_1_wrapper [current_fileset]
+update_compile_order -fileset sources_1
 
-puts "======================================================================"
-puts "✅ SUCCESS: BitNet Hardware Architecture successfully built!"
-puts "======================================================================"
+puts "========================================================="
+puts "SUCCESS: Vivado Block Design built and wrapper generated!"
+puts "========================================================="
