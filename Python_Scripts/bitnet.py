@@ -1,132 +1,182 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F 
 import brevitas.nn as qnn
-from brevitas.quant import Int8ActPerTensorFloat
-from brevitas.inject.defaults import Int8WeightPerTensorFloat
+from brevitas.core.quant import QuantType
+from brevitas.quant.solver import WeightQuantSolver
+from brevitas.core.scaling import ScalingImplType
+from brevitas.core.restrict_val import RestrictValueType
 import os
+import numpy as np
+
+# hls4ml import is no longer strictly required, but left in case you un-comment later
+import hls4ml 
+
 import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="torch")
 
-warnings.filterwarnings("ignore", message=".*Named tensors and all their associated APIs.*")
-os.makedirs("./BitNet_LLM_Trained_Models", exist_ok=True)
+# --- 1. Brevitas Dependency Workarounds ---
+class OverTensorView(nn.Module):
+    def __init__(self): super().__init__()
+    def forward(self, x): return x
 
-class BitNetWeightQuant(Int8WeightPerTensorFloat):
-    bit_width = 2
-    narrow_range = True
-
-class QuantBitNetBlock(nn.Module):
-    def __init__(self, hidden_dim=64):
-        super(QuantBitNetBlock, self).__init__()
-        
-        self.quant_in = qnn.QuantIdentity(
-            return_quant_tensor=True, 
-            act_quant=Int8ActPerTensorFloat
-        )
-        # FIX: Reverted to bias=False to force a pure 'MatMul' ONNX export
-        self.linear1 = qnn.QuantLinear(
-            hidden_dim, hidden_dim * 2, 
-            bias=False, 
-            weight_quant=BitNetWeightQuant,
-            return_quant_tensor=True 
-        )
-        self.relu = qnn.QuantReLU(
-            return_quant_tensor=True, 
-            act_quant=Int8ActPerTensorFloat
-        )
-        self.linear2 = qnn.QuantLinear(
-            hidden_dim * 2, hidden_dim, 
-            bias=False, 
-            weight_quant=BitNetWeightQuant,
-            return_quant_tensor=False 
-        )
-
+class AbsMean(nn.Module):
+    def __init__(self, scaling_stats_reduce_dim=None, keepdim=True):
+        super().__init__()
+        self.dim = scaling_stats_reduce_dim
+        self.keepdim = keepdim
     def forward(self, x):
-        x = self.quant_in(x)
-        x = self.linear1(x)
-        x = self.relu(x)
-        x = self.linear2(x)
-        return x
+        return torch.mean(torch.abs(x), dim=self.dim, keepdim=self.keepdim) if self.dim else torch.mean(torch.abs(x))
 
-def train_autoencoder():
-    print("\n" + "="*60)
-    print("🚀 BITNET 1.58b: HARDWARE-COMPLIANT RECONSTRUCTION")
-    print("="*60)
-    
-    hidden_dim = 64 
-    model = QuantBitNetBlock(hidden_dim=hidden_dim)
-    model.train()
-    
-    optimizer = optim.Adam(model.parameters(), lr=0.01)
-    criterion = nn.MSELoss()
-    
-    N_samples = 10000
-    batch_size = 256
-    epochs = 400
-    
-    print(f"[*] Generating structured dataset (Low-Rank Manifold)...")
-    rank = 8
-    base_patterns = torch.randn(rank, hidden_dim) * 0.5
-    coefficients = torch.randn(N_samples, rank)
-    
-    X_train = torch.matmul(coefficients, base_patterns)
-    X_train = X_train / X_train.std() * 0.5
-    
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-    
-    print(f"[*] Training pure MatMul-Free Autoencoder for {epochs} epochs...\n")
-    
-    for epoch in range(epochs):
-        permutation = torch.randperm(N_samples)
-        epoch_loss = 0.0
-        
-        for i in range(0, N_samples, batch_size):
-            indices = permutation[i:i+batch_size]
-            batch_x = X_train[indices]
-            
-            optimizer.zero_grad()
-            outputs = model(batch_x)
-            loss = criterion(outputs, batch_x)
-            
-            loss.backward()
-            optimizer.step()
-            epoch_loss += loss.item()
-            
-        scheduler.step()
-        
-        if (epoch + 1) % 50 == 0:
-            avg_loss = epoch_loss / (N_samples / batch_size)
-            print(f"    -> Epoch {epoch+1:3d} | Average MSE Loss: {avg_loss:.6f}")
+# --- 2. BitNet 1.58b Quantizer ---
+class BitNetWeightQuant(WeightQuantSolver):
+    quant_type, scaling_impl_type = QuantType.TERNARY, ScalingImplType.STATS
+    scaling_stats_impl, scaling_stats_op = AbsMean, 'MEAN'
+    scaling_per_output_channel = False
+    scaling_stats_input_view_shape_impl = OverTensorView
+    restrict_scaling_type = RestrictValueType.FP
+    bit_width, narrow_range, threshold, signed = 2, True, 0.5, True
 
-    print("\n" + "="*60)
-    print("⚖️  FINAL HARDWARE ACCURACY CHECK")
-    print("="*60)
+def export_testbench_data(dummy_input, out_quant, folder_path="./Vitis_HLS/src/tb_data"):
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
     
-    model.eval()
-    test_samples = 500
+    # 1. Export Input Features
+    input_data = dummy_input.detach().cpu().numpy().flatten()
+    np.savetxt(os.path.join(folder_path, "tb_input_features.dat"), [input_data], delimiter=' ')
     
-    test_coeffs = torch.randn(test_samples, rank)
-    X_test = torch.matmul(test_coeffs, base_patterns)
-    X_test = X_test / X_test.std() * 0.5
+    # 2. Export Output Predictions (Golden)
+    output_data = out_quant.detach().cpu().numpy().flatten()
+    np.savetxt(os.path.join(folder_path, "tb_output_predictions.dat"), [output_data], delimiter=' ')
+    
+    print(f"[Success] Testbench data exported to {folder_path}")
+
+def export_multi_sample_testbench(model, in_dim, num_samples=100, folder_path="./Vitis_HLS/src/tb_data"):
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+    
+    inputs = []
+    predictions = []
+    
+    print(f"\n[Dataset] Generating {num_samples} samples...")
+    for _ in range(num_samples):
+        # Generate random input
+        sample_input = torch.randn(1, in_dim)
+        
+        # Get PyTorch "Golden" prediction (already quantized weights)
+        with torch.no_grad():
+            sample_output = model(sample_input)
+            
+        inputs.append(sample_input.detach().cpu().numpy().flatten())
+        predictions.append(sample_output.detach().cpu().numpy().flatten())
+    
+    # Save as space-separated values (one sample per line)
+    with open(os.path.join(folder_path, "tb_input_features.dat"), "w") as f_in:
+        np.savetxt(f_in, inputs, fmt='%.8f', delimiter=' ')
+        
+    with open(os.path.join(folder_path, "tb_output_predictions.dat"), "w") as f_out:
+        np.savetxt(f_out, predictions, fmt='%.8f', delimiter=' ')
+    
+    print(f"[Success] Exported {num_samples} samples to {folder_path}")
+
+def export_weights_to_hls(ternary_weights, filename="./Vitis_HLS/src/weights_data.h"):
+    """
+    Converts a 64x64 ternary weight tensor into a C++ 2D array.
+    """
+    # Create the target directory if it doesn't exist
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    
+    # Ensure weights are integers
+    weights = ternary_weights.detach().cpu().numpy().astype(int)
+    
+    with open(filename, "w") as f:
+        f.write("// BitNet 1.58b Ternary Weights (64x64)\n")
+        for i in range(weights.shape[0]):
+            # Join the row with commas
+            row_str = ", ".join(map(str, weights[i]))
+            # Wrap in braces and add a comma for the next row
+            f.write(f"    {{ {row_str} }},\n")
+            
+    print(f"[Success] Weights exported to {filename}")
+
+
+# --- 3. Main Execution ---
+if __name__ == "__main__":
+    torch.manual_seed(42) 
+    in_dim, out_dim = 64, 64 
+    
+    # 1. Instantiate Brevitas Layer
+    temp_quant_layer = qnn.QuantLinear(
+        in_dim, out_dim, bias=False, 
+        weight_quant=BitNetWeightQuant, return_quant_tensor=False
+    )
     
     with torch.no_grad():
-        predictions = model(X_test)
-        
-    similarity = F.cosine_similarity(predictions.flatten(), X_test.flatten(), dim=0).item()
-    accuracy_pct = similarity * 100.0
+        nn.init.uniform_(temp_quant_layer.weight, -1.0, 1.0)
     
-    print(f"[*] Tested on {test_samples} unseen structured signals.")
-    print(f"[*] Reconstruction Accuracy: {accuracy_pct:.2f}%")
+    # Define the dummy input and save it to a variable
+    dummy_input = torch.randn(in_dim) 
     
-    if accuracy_pct >= 90.0:
-        print("\n✅ SUCCESS: The 1.58-bit model successfully hit the target.")
-    else:
-        print("\n⚠️ FAILED: The model is still not converging correctly.")
-        
-    save_path = "./BitNet_LLM_Trained_Models/trained_bitnet.pth"
-    torch.save(model.state_dict(), save_path)
-    print(f"[*] Trained hardware weights safely saved to '{save_path}'")
-    print("="*60 + "\n")
+    # Run the forward pass and save the result to out_quant
+    out_quant = temp_quant_layer(dummy_input)
+    
+    # Extract Raw Integers and Scale
+    qw = temp_quant_layer.quant_weight()
+    scale_factor = qw.scale.detach().item()
+    ternary_ints = (qw.value.detach() / scale_factor).round()
+    
+    print(f"Hardware Check - Unique Ints: {torch.unique(ternary_ints).tolist()}")
+    print(f"Hardware Check - Scale Factor: {scale_factor:.4f}")
 
-if __name__ == "__main__":
-    train_autoencoder()
+    # 2. Create hls4ml-ready model (now just used as a PyTorch container for inference)
+    hls_ready_model = nn.Sequential(
+        nn.Linear(in_dim, out_dim, bias=False)
+    )
+    
+    with torch.no_grad():
+        hls_ready_model[0].weight.copy_(ternary_ints)
+
+    # =========================================================
+    # hls4ml Generation Block (Commented Out for Manual Flow)
+    # =========================================================
+    '''
+    print("\n[Export] Initializing hls4ml conversion...")
+    
+    config = hls4ml.utils.config_from_pytorch_model(
+        hls_ready_model, 
+        input_shape=(in_dim,), 
+        granularity='name'
+    )
+
+    config['Model']['Precision'] = 'ap_fixed<16,6>' 
+    config['Model']['AccumulatorPrecision'] = 'ap_fixed<32,12>' 
+    
+    for layer in config['LayerName'].keys():
+        config['LayerName'][layer]['AccumulatorPrecision'] = 'ap_fixed<32,12>'
+        config['LayerName'][layer]['ResultPrecision'] = 'ap_fixed<32,12>'
+        config['LayerName'][layer]['ReuseFactor'] = 64
+        config['LayerName'][layer]['Strategy'] = 'Resource'
+
+    export_path = "./BitNet_LLM/Vitis_HLS/hls4ml_bitnet_prj"
+    
+    hls_model = hls4ml.converters.convert_from_pytorch_model(
+        hls_ready_model,
+        project_name='BitNet_HLS',
+        hls_config=config,
+        output_dir=export_path,
+        part='xc7z010clg400-1'
+    )
+    
+    hls_model.write()
+    print(f"\n[Success] Project generated in '{export_path}'")
+    '''
+    
+    # =========================================================
+    # Export Data for Manual HLS
+    # =========================================================
+    print(f"\nFinal Step: Apply scale factor {scale_factor:.4f} in your Vitis Testbench/Wrapper.")
+
+    # 1. Export 100 samples to the ./Vitis_HLS/src/tb_data folder
+    #export_multi_sample_testbench(hls_ready_model, in_dim, num_samples=100, folder_path="./Vitis_HLS/src/tb_data")
+    
+    # 2. Export the ternary matrix for your manual C++ code
+    export_multi_sample_testbench(temp_quant_layer, in_dim, num_samples=100, folder_path="./Vitis_HLS/src/tb_data")
