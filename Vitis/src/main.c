@@ -1,29 +1,27 @@
-/*
 #include <stdio.h>
 #include "xil_printf.h"
 #include "xil_io.h"
 #include "xparameters.h"
+#include "test_data.h" 
 
-// Your Vivado Base Address
 #define BITNET_BASE_ADDR 0x40000000
 
-// Exact offsets from xbitnet_hls_hw.h
 #define CTRL_REG_OFFSET  0x000
 #define IN_ARRAY_OFFSET  0x080  
 #define OUT_ARRAY_OFFSET 0x100 
 
-// --- Fixed-Point Conversion Macros ---
-// ap_fixed<16,6>  -> 10 fractional bits (2^10 = 1024)
 #define FLOAT_TO_FIXED_16_6(val) ((short)((val) * 1024.0f))
-
-// ap_fixed<32,12> -> 20 fractional bits (2^20 = 1048576)
 #define FIXED_32_12_TO_FLOAT(val) (((float)(int)(val)) / 1048576.0f)
-
-// Scale factor from your Python script
 #define BITNET_SCALE 0.5038f
 
+// --- Direct Memory Addresses for Zynq ARM Global Timer ---
+#define ZYNQ_TIMER_LOWER_32 0xF8F00200
+#define ZYNQ_TIMER_CTRL     0xF8F00208
+
 int main() {
-    xil_printf("\r\n========================================\r\n");
+
+
+     xil_printf("\r\n========================================\r\n");
     xil_printf("   BitNet 1.58b Hardware Accelerator\r\n");
     xil_printf("========================================\r\n");
 
@@ -84,31 +82,10 @@ int main() {
     }
 
     xil_printf("\r\n[SYSTEM] Run Finished Successfully.\r\n");
-    return 0;
-}
-*/
+    xil_printf("\r\n========================================\r\n\n\n");
 
-#include <stdio.h>
-#include "xil_printf.h"
-#include "xil_io.h"
-#include "xparameters.h"
-#include "test_data.h" 
 
-#define BITNET_BASE_ADDR 0x40000000
 
-#define CTRL_REG_OFFSET  0x000
-#define IN_ARRAY_OFFSET  0x080  
-#define OUT_ARRAY_OFFSET 0x100 
-
-#define FLOAT_TO_FIXED_16_6(val) ((short)((val) * 1024.0f))
-#define FIXED_32_12_TO_FLOAT(val) (((float)(int)(val)) / 1048576.0f)
-#define BITNET_SCALE 0.5038f
-
-// --- Direct Memory Addresses for Zynq ARM Global Timer ---
-#define ZYNQ_TIMER_LOWER_32 0xF8F00200
-#define ZYNQ_TIMER_CTRL     0xF8F00208
-
-int main() {
     xil_printf("\r\n========================================\r\n");
     xil_printf("   BitNet Hardware-in-the-Loop Test\r\n");
     xil_printf("========================================\r\n");
